@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sales-voice-agent-whapi"
+version = "0.1.0"
+description = "Whapi integration for the existing ElevateBox Sarvam voice agent"
+requires-python = ">=3.11"
+dependencies = [
+    "APScheduler==3.11.0",
+    "SQLAlchemy==2.0.43",
+    "alembic==1.16.5",
+    "asyncpg==0.30.0",
+    "fastapi==0.115.12",
+    "httpx==0.28.1",
+    "pydantic-settings==2.9.1",
+    "supabase==2.18.1",
+    "uvicorn[standard]==0.34.2",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest==8.3.5",
+    "pytest-asyncio==0.26.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
