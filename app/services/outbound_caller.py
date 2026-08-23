@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Protocol
+from uuid import uuid4
 
 from pydantic import BaseModel
 
@@ -15,6 +16,7 @@ class OutboundCallRequest(BaseModel):
 class OutboundCallResult(BaseModel):
     success: bool
     call_id: str | None = None
+    provider_attempt_id: str | None = None
     error: str | None = None
     retryable: bool = False
 
@@ -105,6 +107,10 @@ class SarvamHttpOutboundCaller:
 
     async def place_call(self, request: OutboundCallRequest) -> OutboundCallResult:
         settings = self._settings
+        # The agent reads call_id and phone from its input variables and echoes
+        # them into every tool call. Sarvam's own id is not known until the
+        # response, so mint one here and use it on both sides.
+        call_id = f"cb-{request.callback_id}-{uuid4().hex[:12]}"
         app_config: dict[str, object] = {
             "app_id": settings.sarvam_app_id,
             "app_type": "agent",
@@ -112,11 +118,11 @@ class SarvamHttpOutboundCaller:
                 "connection_id": settings.sarvam_connection_id,
                 "agent_phone_number": settings.sarvam_agent_phone_number,
             },
-            "agent_variables": self._agent_variables(request),
+            "agent_variables": self._agent_variables(request, call_id),
         }
         app_config.update(_version_config(settings))
 
-        overrides = self._app_overrides(request)
+        overrides = self._app_overrides(request, call_id)
         if overrides:
             app_config["app_overrides"] = overrides
 
@@ -170,29 +176,37 @@ class SarvamHttpOutboundCaller:
             body = response.json()
         except ValueError:
             body = None
-        call_id = _extract_call_id(body)
-        if not call_id:
+        attempt_id = _extract_call_id(body)
+        if not attempt_id:
             return OutboundCallResult(
                 success=False, error="sarvam_outbound_no_call_id", retryable=False
             )
-        return OutboundCallResult(success=True, call_id=call_id)
+        return OutboundCallResult(
+            success=True, call_id=call_id, provider_attempt_id=attempt_id
+        )
 
-    def _agent_variables(self, request: OutboundCallRequest) -> dict[str, str]:
+    def _agent_variables(
+        self, request: OutboundCallRequest, call_id: str
+    ) -> dict[str, str]:
         variables: dict[str, str] = {}
         for key, value in request.context.items():
             flattened = _as_variable(value)
             if flattened is not None:
                 variables[key] = flattened
         variables["callback_id"] = str(request.callback_id)
+        variables["call_id"] = call_id
+        variables["phone"] = _e164(request.phone)
         return variables
 
-    def _app_overrides(self, request: OutboundCallRequest) -> dict[str, str]:
+    def _app_overrides(
+        self, request: OutboundCallRequest, call_id: str
+    ) -> dict[str, str]:
         overrides: dict[str, str] = {}
         template = self._settings.sarvam_callback_opening
         if template:
             try:
                 overrides["initial_bot_message"] = template.format(
-                    **self._agent_variables(request)
+                    **self._agent_variables(request, call_id)
                 )
             except (KeyError, IndexError):
                 overrides["initial_bot_message"] = template

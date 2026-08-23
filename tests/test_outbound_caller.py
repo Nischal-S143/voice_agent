@@ -72,7 +72,10 @@ async def test_place_call_sends_integer_version_and_flattened_variables() -> Non
     result = await caller.place_call(_request())
 
     assert result.success is True
-    assert result.call_id == "att_9"
+    # The agent echoes our minted id back through its tool calls, so the row we
+    # store has to key on that rather than on Sarvam's attempt id.
+    assert result.call_id.startswith("cb-7-")
+    assert result.provider_attempt_id == "att_9"
     body = client.calls[0]["json"]
     assert body["app_config"]["app_version"] == 1
     assert body["user_config"]["user_phone_number"] == "+919999999999"
@@ -123,3 +126,14 @@ async def test_place_call_pins_a_specific_version_when_one_is_configured() -> No
     app_config = client.calls[0]["json"]["app_config"]
     assert app_config["version_filter"] == "specific"
     assert app_config["app_version"] == 1
+
+
+async def test_place_call_supplies_call_id_and_phone_to_the_agent() -> None:
+    """Both are declared input variables; an empty one makes every tool call 422."""
+    client = FakeClient(FakeResponse(200, {"attempt_id": "att_1"}))
+
+    result = await SarvamHttpOutboundCaller(client, _settings()).place_call(_request())
+
+    variables = client.calls[0]["json"]["app_config"]["agent_variables"]
+    assert variables["call_id"] == result.call_id
+    assert variables["phone"] == "+919999999999"
