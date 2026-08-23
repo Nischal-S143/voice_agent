@@ -3,8 +3,12 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import Any
 
+import logging
+
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from supabase import create_client
 
 from app.api.tools import router as tools_router
@@ -24,6 +28,8 @@ from app.services.outbound_caller import (
 )
 from app.services.storage_service import StorageService
 from app.scheduler.scheduler import create_scheduler
+
+logger = logging.getLogger(__name__)
 
 
 def _sarvam_outbound_configured(settings: Settings) -> bool:
@@ -115,6 +121,25 @@ def create_app(
     application.state.idempotency_store = InMemoryIdempotencyStore()
     if whapi_service is not None:
         application.state.whapi_service = whapi_service
+    @application.exception_handler(RequestValidationError)
+    async def log_validation_error(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        """Name the rejected fields in the logs; a bare 422 is undebuggable.
+
+        Only field locations and error types are logged, never the submitted
+        values, which carry customer phone numbers and conversation content.
+        """
+        problems = [
+            {"field": ".".join(str(part) for part in error["loc"][1:]),
+             "error": error["type"]}
+            for error in exc.errors()
+        ]
+        logger.warning(
+            "request_validation_failed path=%s problems=%s", request.url.path, problems
+        )
+        return JSONResponse(status_code=422, content={"detail": problems})
+
     application.include_router(tools_router)
 
     @application.get("/health")
