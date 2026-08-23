@@ -26,7 +26,13 @@ async def send_high_intent_whatsapp(
     store = request.app.state.idempotency_store
 
     async def send() -> WhapiResult:
-        return await service.send_text(payload.phone, build_high_intent_message(payload))
+        settings = request.app.state.settings
+        return await service.send_text(
+            payload.phone,
+            build_high_intent_message(
+                payload, settings.developer_name, settings.developer_phone
+            ),
+        )
 
     try:
         result, already_sent = await store.run_once(payload.call_id, send)

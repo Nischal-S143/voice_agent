@@ -2,7 +2,11 @@ from app.schemas.whatsapp import HighIntentWhatsAppRequest
 from app.schemas.complete_call import CompleteCallRequest
 
 
-def build_high_intent_message(request: HighIntentWhatsAppRequest) -> str:
+def build_high_intent_message(
+    request: HighIntentWhatsAppRequest,
+    developer_name: str = "",
+    developer_phone: str = "",
+) -> str:
     paragraphs = ["Hi,", "Great speaking with you."]
 
     description_parts: list[str] = []
@@ -33,7 +37,25 @@ def build_high_intent_message(request: HighIntentWhatsAppRequest) -> str:
         "Sharing the details here so they're easy to refer back to while we continue "
         "the conversation."
     )
+    paragraphs.extend(_signature(developer_name, developer_phone))
     return "\n\n".join(paragraphs)
+
+
+def _quoted_statements(statements: list[str]) -> str:
+    """Echo the lead's own words back so the follow-up cannot read as a template."""
+    cleaned = [statement.strip() for statement in statements if statement.strip()]
+    if not cleaned:
+        return ""
+    quoted = [f'"{statement}"' for statement in cleaned[:3]]
+    return (
+        "You said " + _human_join(quoted) + " - that is exactly what I will design around."
+    )
+
+
+def _signature(developer_name: str, developer_phone: str) -> list[str]:
+    """Close with the name and a reachable number, per the follow-up brief."""
+    lines = [line for line in (developer_name.strip(), developer_phone.strip()) if line]
+    return ["\n".join(lines)] if lines else []
 
 
 def _human_join(items: list[str]) -> str:
@@ -45,7 +67,11 @@ def _human_join(items: list[str]) -> str:
     return ", ".join(cleaned[:-1]) + f" and {cleaned[-1]}"
 
 
-def build_final_followup(request: CompleteCallRequest, developer_name: str) -> str:
+def build_final_followup(
+    request: CompleteCallRequest,
+    developer_name: str,
+    developer_phone: str = "",
+) -> str:
     paragraphs = ["Hi,", "Great speaking with you."]
     details: list[str] = []
     if request.business_type:
@@ -65,9 +91,11 @@ def build_final_followup(request: CompleteCallRequest, developer_name: str) -> s
         commercial.append(f"a target launch within {request.timeline}")
     if commercial:
         paragraphs.append("You mentioned " + " and ".join(commercial) + ".")
+    quoted = _quoted_statements(request.important_statements)
+    if quoted:
+        paragraphs.append(quoted)
     paragraphs.append(
         "I've also shared my resume and the architecture overview of the system that called you."
     )
-    if developer_name:
-        paragraphs.append(developer_name)
+    paragraphs.extend(_signature(developer_name, developer_phone))
     return "\n\n".join(paragraphs)

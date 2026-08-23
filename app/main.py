@@ -18,9 +18,32 @@ from app.services.configured_services import (
     PersistentHighIntentService,
     UnavailableStorage,
 )
-from app.services.outbound_caller import UnconfiguredSarvamOutboundCaller
+from app.services.outbound_caller import (
+    SarvamHttpOutboundCaller,
+    UnconfiguredSarvamOutboundCaller,
+)
 from app.services.storage_service import StorageService
 from app.scheduler.scheduler import create_scheduler
+
+
+def _sarvam_outbound_configured(settings: Settings) -> bool:
+    """Every field below is required to address a single Instant Outbound call."""
+    return all(
+        (
+            settings.sarvam_api_key.get_secret_value(),
+            settings.sarvam_org_id,
+            settings.sarvam_workspace_id,
+            settings.sarvam_app_id,
+            settings.sarvam_connection_id,
+            settings.sarvam_agent_phone_number,
+        )
+    )
+
+
+def _build_outbound_caller(settings: Settings, client: Any | None) -> Any:
+    if client is None or not _sarvam_outbound_configured(settings):
+        return UnconfiguredSarvamOutboundCaller()
+    return SarvamHttpOutboundCaller(client, settings)
 
 
 def create_app(
@@ -59,7 +82,7 @@ def create_app(
                 )
             if session_factory is not None:
                 app.state.high_intent_service = PersistentHighIntentService(
-                    session_factory, active_whapi
+                    session_factory, active_whapi, application_settings
                 )
                 if app.state.call_service is None:
                     app.state.call_service = ConfiguredCallService(
@@ -67,7 +90,8 @@ def create_app(
                     )
                 if app.state.callback_service is None:
                     app.state.callback_service = ConfiguredCallbackService(
-                        session_factory, UnconfiguredSarvamOutboundCaller()
+                        session_factory,
+                        _build_outbound_caller(application_settings, owned_client),
                     )
                 scheduler = create_scheduler(
                     app.state.callback_service,

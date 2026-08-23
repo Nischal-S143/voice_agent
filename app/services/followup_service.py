@@ -99,8 +99,12 @@ class FollowupService:
     async def _send_resume(self, phone: str) -> WhapiResult:
         url = await self._storage.create_signed_url(self._resume_path)
         return await self._whapi.send_document(
-            phone, url, filename="Parv_Agarwal_Resume.pdf"
+            phone, url, filename=self._resume_filename()
         )
+
+    def _resume_filename(self) -> str:
+        """Name the attachment after the stored object so it tracks the upload."""
+        return self._resume_path.rsplit("/", 1)[-1] or "resume.pdf"
 
     async def _send_architecture(self, phone: str) -> WhapiResult:
         url = await self._storage.create_signed_url(self._architecture_path)

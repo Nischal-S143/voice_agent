@@ -42,6 +42,7 @@ class ConfiguredCallService:
                 events,
                 followup,
                 self._settings.developer_name,
+                self._settings.developer_phone,
             ).complete_call(request)
 
 
@@ -70,9 +71,10 @@ class ConfiguredCallbackService:
 
 
 class PersistentHighIntentService:
-    def __init__(self, session_factory: Any, whapi: Any) -> None:
+    def __init__(self, session_factory: Any, whapi: Any, settings: Any = None) -> None:
         self._sessions = session_factory
         self._whapi = whapi
+        self._settings = settings
 
     async def send(self, request: Any) -> dict[str, object]:
         from app.services.message_builder import build_high_intent_message
@@ -108,7 +110,12 @@ class PersistentHighIntentService:
                 return {"success": True, "already_sent": True}
             try:
                 result = await self._whapi.send_text(
-                    request.phone, build_high_intent_message(request)
+                    request.phone,
+                    build_high_intent_message(
+                        request,
+                        getattr(self._settings, "developer_name", ""),
+                        getattr(self._settings, "developer_phone", ""),
+                    ),
                 )
             except (WhapiProviderError, ValueError):
                 await events.release_delivery(

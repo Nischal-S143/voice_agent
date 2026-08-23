@@ -17,6 +17,7 @@ class CallService:
         events: Any,
         followup: Any,
         developer_name: str,
+        developer_phone: str = "",
     ) -> None:
         self._session = session
         self._leads = leads
@@ -24,6 +25,7 @@ class CallService:
         self._events = events
         self._followup = followup
         self._developer_name = developer_name
+        self._developer_phone = developer_phone
 
     async def complete_call(self, request: CompleteCallRequest) -> Any:
         products = request.products_sold
@@ -72,5 +74,7 @@ class CallService:
             lead.id,
             call.id,
             request.phone,
-            build_final_followup(request, self._developer_name),
+            build_final_followup(
+                request, self._developer_name, self._developer_phone
+            ),
         )
