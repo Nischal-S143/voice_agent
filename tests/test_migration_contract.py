@@ -74,3 +74,16 @@ def test_initial_migration_emits_private_schema_and_operational_postgresql_contr
     assert "WHERE STATUS = 'PENDING'" in sql
     assert "REVOKE ALL ON SCHEMA SALES_AGENT FROM ANON" in sql
     assert "REVOKE ALL ON SCHEMA SALES_AGENT FROM AUTHENTICATED" in sql
+
+
+def test_pooler_safe_url_disables_the_prepared_statement_cache() -> None:
+    from app.database import _pooler_safe_url
+
+    plain = "postgresql+asyncpg://u:p@host:6543/postgres"
+    assert _pooler_safe_url(plain).endswith("?prepared_statement_cache_size=0")
+
+    with_query = "postgresql+asyncpg://u:p@host:6543/postgres?ssl=require"
+    assert _pooler_safe_url(with_query).endswith("&prepared_statement_cache_size=0")
+
+    already_set = "postgresql+asyncpg://u:p@h/db?prepared_statement_cache_size=0"
+    assert _pooler_safe_url(already_set) == already_set
