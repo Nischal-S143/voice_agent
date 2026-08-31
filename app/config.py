@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_service_role_key: SecretStr = SecretStr("")
     supabase_storage_bucket: str = "sales-agent-assets"
-    supabase_resume_object_path: str = "resume/Parv_Agarwal_Resume.pdf"
+    supabase_resume_object_path: str = "resume/Nischal_Saxena_Resume.pdf"
     supabase_architecture_object_path: str = "architecture/voice-agent.png"
     whapi_base_url: str = "https://gate.whapi.cloud"
     whapi_token: SecretStr = SecretStr("")
@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     default_timezone: str = "Asia/Kolkata"
     callback_poll_seconds: int = 15
     callback_signed_url_ttl_seconds: int = 900
-    developer_name: str = "Parv Agarwal"
+    developer_name: str = "Nischal Saxena"
     developer_phone: str = ""
 
 
