@@ -42,14 +42,9 @@ async def send_high_intent_whatsapp(
         result, already_sent = await store.run_once(payload.call_id, send)
     except (WhapiProviderError, ValueError):
         logger.error(
-            "high_intent_whatsapp_failed",
-            extra={
-                "call_id": payload.call_id,
-                "phone": payload.phone,
-                "operation": "send_high_intent_whatsapp",
-                "status": "failed",
-                "error": "whapi_send_failed",
-            },
+            "high_intent_whatsapp_failed call_id=%s phone=%r",
+            payload.call_id,
+            payload.phone,
         )
         return {"success": False, "error": "whapi_send_failed"}
 
@@ -76,18 +71,14 @@ async def complete_call(
         # Nothing was written, so without the rejected value there is no way to
         # tell a malformed number from a missing one after the call has ended.
         logger.error(
-            "complete_call_rejected_phone",
-            extra={
-                "call_id": payload.call_id,
-                "phone": payload.phone,
-                "operation": "complete_call",
-                "status": "failed",
-                "error": str(error) or "invalid_phone",
-            },
+            "complete_call_rejected_phone call_id=%s phone=%r reason=%s",
+            payload.call_id,
+            payload.phone,
+            error or "invalid_phone",
         )
         return {"success": False, "error": "invalid_phone"}
     except Exception:
-        logger.exception("complete_call_failed", extra={"call_id": payload.call_id})
+        logger.exception("complete_call_failed call_id=%s", payload.call_id)
         return {"success": False, "error": "complete_call_failed"}
     return result.model_dump()
 
@@ -105,16 +96,12 @@ async def schedule_callback(
         return await service.schedule(payload)
     except ValueError as error:
         logger.error(
-            "schedule_callback_rejected",
-            extra={
-                "call_id": payload.call_id,
-                "phone": payload.phone,
-                "operation": "schedule_callback",
-                "status": "failed",
-                "error": str(error) or "invalid_callback_request",
-            },
+            "schedule_callback_rejected call_id=%s phone=%r reason=%s",
+            payload.call_id,
+            payload.phone,
+            error or "invalid_callback_request",
         )
         return {"success": False, "error": "invalid_callback_request"}
     except Exception:
-        logger.exception("schedule_callback_failed", extra={"call_id": payload.call_id})
+        logger.exception("schedule_callback_failed call_id=%s", payload.call_id)
         return {"success": False, "error": "callback_schedule_failed"}

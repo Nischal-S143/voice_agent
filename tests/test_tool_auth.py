@@ -94,6 +94,11 @@ async def test_a_rejected_phone_is_logged_with_the_call_it_came_from(caplog) -> 
             )
 
     assert response.json() == {"success": False, "error": "invalid_phone"}
-    record = next(r for r in caplog.records if r.message == "complete_call_rejected_phone")
-    assert record.call_id == "call-9"
-    assert record.phone == "not-a-number"
+    # The rendered message must carry the values: extra={} attaches attributes
+    # the default formatter drops, which is how this went unlogged in production.
+    rendered = next(
+        r.getMessage() for r in caplog.records
+        if r.getMessage().startswith("complete_call_rejected_phone")
+    )
+    assert "call-9" in rendered
+    assert "not-a-number" in rendered
