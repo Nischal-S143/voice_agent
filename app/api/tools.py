@@ -22,7 +22,11 @@ async def send_high_intent_whatsapp(
     persistent_service = getattr(request.app.state, "high_intent_service", None)
     if persistent_service is not None:
         return await persistent_service.send(payload)
-    service = request.app.state.whapi_service
+    # No database: fall back to the in-process idempotency store, which cannot
+    # survive a restart or span workers but still stops a repeated tool call.
+    service = getattr(request.app.state, "whapi_service", None)
+    if service is None:
+        return {"success": False, "error": "whatsapp_not_configured"}
     store = request.app.state.idempotency_store
 
     async def send() -> WhapiResult:

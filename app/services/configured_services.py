@@ -2,14 +2,22 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.models import CallDirection, EventType
-from app.repositories import CallbackRepository, CallRepository, EventRepository, LeadRepository
+from app.models import CallDirection, MessageKind
+from app.repositories import (
+    AuditEventRepository,
+    CallbackAttemptRepository,
+    CallbackRepository,
+    CallRepository,
+    LeadRepository,
+    MessageRepository,
+)
 from app.services.call_service import CallService
 from app.services.callback_service import CallbackService
 from app.services.followup_service import FollowupService
+from app.services.lead_service import LeadService
+from app.services.message_builder import build_high_intent_message
+from app.services.message_service import MessageService
 from app.services.storage_service import StorageServiceError
-from app.services.whapi_service import WhapiProviderError
-from app.utils.phone import normalize_indian_phone
 
 
 class UnavailableStorage:
@@ -26,20 +34,22 @@ class ConfiguredCallService:
 
     async def complete_call(self, request: Any) -> Any:
         async with self._sessions() as session:
-            events = EventRepository(session)
+            messages = MessageService(
+                MessageRepository(session), AuditEventRepository(session), session
+            )
             followup = FollowupService(
                 self._whapi,
                 self._storage,
-                events,
-                session,
+                messages,
                 self._settings.supabase_resume_object_path,
                 self._settings.supabase_architecture_object_path,
             )
             return await CallService(
                 session,
-                LeadRepository(session),
+                LeadService(LeadRepository(session)),
                 CallRepository(session),
-                events,
+                CallbackRepository(session),
+                AuditEventRepository(session),
                 followup,
                 self._settings.developer_name,
                 self._settings.developer_phone,
@@ -62,37 +72,29 @@ class ConfiguredCallbackService:
     def _service(self, session: Any) -> CallbackService:
         return CallbackService(
             session,
-            LeadRepository(session),
+            LeadService(LeadRepository(session)),
             CallRepository(session),
             CallbackRepository(session),
-            EventRepository(session),
+            CallbackAttemptRepository(session),
+            AuditEventRepository(session),
             self._outbound,
         )
 
 
 class PersistentHighIntentService:
+    """Mid-call WhatsApp: capture what is known so far, then send once."""
+
     def __init__(self, session_factory: Any, whapi: Any, settings: Any = None) -> None:
         self._sessions = session_factory
         self._whapi = whapi
         self._settings = settings
 
     async def send(self, request: Any) -> dict[str, object]:
-        from app.services.message_builder import build_high_intent_message
-
         async with self._sessions() as session:
-            leads = LeadRepository(session)
-            calls = CallRepository(session)
-            events = EventRepository(session)
-            count = int(request.product_count) if request.product_count and request.product_count.isdigit() else None
-            lead = await leads.upsert_by_phone(
-                normalize_indian_phone(request.phone),
-                business_type=request.business_type,
-                product_count=count,
-                required_features=request.required_features,
-                budget=request.budget_range,
-                timeline=request.timeline,
+            lead = await LeadService(LeadRepository(session)).upsert_from_high_intent(
+                request
             )
-            call = await calls.upsert_by_sarvam_call_id(
+            call = await CallRepository(session).upsert_by_sarvam_call_id(
                 request.call_id,
                 lead_id=lead.id,
                 direction=CallDirection.INITIAL,
@@ -100,37 +102,27 @@ class PersistentHighIntentService:
                 summary=request.summary,
             )
             await session.commit()
-            reserved = await events.reserve_delivery(
+
+            text = build_high_intent_message(
+                request,
+                getattr(self._settings, "developer_name", ""),
+                getattr(self._settings, "developer_phone", ""),
+            )
+            messages = MessageService(
+                MessageRepository(session), AuditEventRepository(session), session
+            )
+            outcome = await messages.deliver(
                 lead_id=lead.id,
                 call_id=call.id,
-                target_event_type=EventType.HIGH_INTENT_WHATSAPP_SENT,
+                kind=MessageKind.HIGH_INTENT,
+                send=lambda: self._whapi.send_text(request.phone, text),
             )
-            await session.commit()
-            if not reserved:
+            if not outcome.sent:
+                return {"success": False, "error": outcome.error}
+            if outcome.already_sent:
                 return {"success": True, "already_sent": True}
-            try:
-                result = await self._whapi.send_text(
-                    request.phone,
-                    build_high_intent_message(
-                        request,
-                        getattr(self._settings, "developer_name", ""),
-                        getattr(self._settings, "developer_phone", ""),
-                    ),
-                )
-            except (WhapiProviderError, ValueError):
-                await events.release_delivery(
-                    lead_id=lead.id,
-                    call_id=call.id,
-                    target_event_type=EventType.HIGH_INTENT_WHATSAPP_SENT,
-                    payload={"error": "whapi_send_failed"},
-                )
-                await session.commit()
-                return {"success": False, "error": "whapi_send_failed"}
-            await events.complete_delivery(
-                lead_id=lead.id,
-                call_id=call.id,
-                target_event_type=EventType.HIGH_INTENT_WHATSAPP_SENT,
-                payload={"provider_message_id": result.message_id},
-            )
-            await session.commit()
-            return {"success": True, "message_id": result.message_id, "already_sent": False}
+            return {
+                "success": True,
+                "message_id": outcome.provider_message_id,
+                "already_sent": False,
+            }

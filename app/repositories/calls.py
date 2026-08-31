@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,13 +18,15 @@ class CallRepository:
         sarvam_call_id: str,
         *,
         lead_id: int,
-        direction: CallDirection,
+        direction: CallDirection | str,
         **values: Any,
     ) -> Call:
         payload = {
             "sarvam_call_id": sarvam_call_id,
             "lead_id": lead_id,
-            "direction": direction.value,
+            # The column is TEXT, so a direction read back from a stored row
+            # arrives as a plain string; accept either form.
+            "direction": CallDirection(direction).value,
             **values,
         }
         statement = insert(Call).values(**payload)
@@ -34,3 +37,9 @@ class CallRepository:
         ).returning(Call)
         result = await self._session.execute(statement)
         return result.scalar_one()
+
+    async def get_by_sarvam_call_id(self, sarvam_call_id: str) -> Call | None:
+        result = await self._session.execute(
+            sa.select(Call).where(Call.sarvam_call_id == sarvam_call_id)
+        )
+        return result.scalar_one_or_none()

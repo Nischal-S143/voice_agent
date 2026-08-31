@@ -6,12 +6,15 @@ from enum import StrEnum
 import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.models.audit_event import in_values
 from app.models.base import Base
 
 
 class CallbackStatus(StrEnum):
+    """PENDING is claimed into IN_PROGRESS, which the completed call closes."""
+
     PENDING = "PENDING"
-    TRIGGERED = "TRIGGERED"
+    IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
@@ -51,10 +54,7 @@ class Callback(Base):
         sa.UniqueConstraint(
             "source_call_id", "scheduled_at", name="uq_callbacks_source_call_scheduled_at"
         ),
-        sa.CheckConstraint(
-            "status IN ('PENDING', 'TRIGGERED', 'COMPLETED', 'FAILED', 'CANCELLED')",
-            name="ck_callbacks_status",
-        ),
+        sa.CheckConstraint(in_values("status", CallbackStatus), name="ck_callbacks_status"),
         sa.Index("ix_callbacks_lead_id", "lead_id"),
         sa.Index("ix_callbacks_source_call_id", "source_call_id"),
         sa.Index(

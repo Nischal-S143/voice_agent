@@ -1,25 +1,30 @@
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from typing import Any
 
-import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
-from sqlalchemy.schema import CreateTable
 
-from app.repositories import CallbackRepository, CallRepository, EventRepository, LeadRepository
 from app.models import (
-    Callback,
-    CallbackStatus,
+    AuditEvent,
     Call,
+    Callback,
+    CallbackAttemptStatus,
+    CallbackStatus,
     CallDirection,
-    DeliveryReservation,
-    Event,
     EventType,
     Lead,
+    Message,
+    MessageKind,
+    MessageStatus,
+)
+from app.repositories import (
+    AuditEventRepository,
+    CallbackAttemptRepository,
+    CallbackRepository,
+    CallRepository,
+    LeadRepository,
+    MessageRepository,
 )
 
 
@@ -36,7 +41,7 @@ class ScalarResult:
 
 
 class RecordingSession:
-    """AsyncSession boundary that records real SQLAlchemy statements and ORM event additions."""
+    """AsyncSession boundary that records real SQLAlchemy statements and ORM additions."""
 
     def __init__(self, *results: object | None) -> None:
         self.results = list(results)
@@ -107,11 +112,45 @@ async def test_call_upsert_uses_sarvam_id_conflict_boundary_and_returns_orm_row(
     assert "RETURNING" in sql
 
 
-async def test_event_append_adds_and_flushes_an_immutable_audit_row() -> None:
+async def test_call_upsert_accepts_a_direction_read_back_from_a_stored_row() -> None:
+    """Catches a completed callback crashing because TEXT columns load as plain strings."""
+    session = RecordingSession(Call(id=42, lead_id=7, sarvam_call_id="cb-19-abc"))
+
+    await CallRepository(session).upsert_by_sarvam_call_id(
+        "cb-19-abc",
+        lead_id=7,
+        direction="CALLBACK",
+        status="completed",
+    )
+
+    parameters = session.statements[0].compile(dialect=postgresql.dialect()).params
+    assert parameters["direction"] == CallDirection.CALLBACK.value
+
+
+async def test_call_lookup_reads_the_existing_row_for_a_provider_call_id() -> None:
+    """Catches losing the stored direction and callback link a completion must preserve."""
+    existing = Call(
+        id=11,
+        lead_id=7,
+        callback_id=19,
+        sarvam_call_id="cb-19-abc",
+        direction=CallDirection.CALLBACK,
+    )
+    session = RecordingSession(existing)
+
+    actual = await CallRepository(session).get_by_sarvam_call_id("cb-19-abc")
+
+    assert actual is existing
+    sql = _postgresql_sql(session.statements[0])
+    assert "FROM sales_agent.calls" in sql
+    assert "sarvam_call_id" in sql
+
+
+async def test_audit_append_adds_and_flushes_an_immutable_row() -> None:
     """Catches event creation being replaced by an update or deferred beyond the caller transaction."""
     session = RecordingSession()
 
-    event = await EventRepository(session).append(
+    event = await AuditEventRepository(session).append(
         lead_id=7,
         call_id=11,
         event_type=EventType.CALL_COMPLETED,
@@ -120,6 +159,7 @@ async def test_event_append_adds_and_flushes_an_immutable_audit_row() -> None:
 
     assert session.added == [event]
     assert session.flush_count == 1
+    assert isinstance(event, AuditEvent)
     assert event.lead_id == 7
     assert event.call_id == 11
     assert event.event_type is EventType.CALL_COMPLETED
@@ -155,8 +195,8 @@ async def test_callback_schedule_uses_unique_conflict_boundary_and_returns_exist
     assert "source_call_id" in select_sql and "scheduled_at" in select_sql
 
 
-async def test_claim_due_locks_one_eligible_callback_and_updates_claim_metadata() -> None:
-    """Catches workers racing on the same callback or returning it before claim metadata is flushed."""
+async def test_claim_due_locks_one_eligible_callback_and_moves_it_to_in_progress() -> None:
+    """Catches workers racing on the same callback or leaving a dialled row eligible again."""
     now = datetime(2026, 8, 22, 10, 0, tzinfo=UTC)
     callback = Callback(
         id=19,
@@ -173,6 +213,7 @@ async def test_claim_due_locks_one_eligible_callback_and_updates_claim_metadata(
     claimed = await CallbackRepository(session).claim_due(now=now)
 
     assert claimed is callback
+    assert callback.status is CallbackStatus.IN_PROGRESS
     assert callback.claimed_at == now
     assert callback.attempt_count == 3
     assert session.flush_count == 1
@@ -195,7 +236,7 @@ async def test_callback_outcomes_clear_claim_and_preserve_retry_metadata() -> No
         requested_expression="now",
         scheduled_at=now,
         timezone="Asia/Kolkata",
-        status=CallbackStatus.PENDING,
+        status=CallbackStatus.IN_PROGRESS,
         attempt_count=1,
         claimed_at=now,
     )
@@ -209,188 +250,158 @@ async def test_callback_outcomes_clear_claim_and_preserve_retry_metadata() -> No
     assert callback.claimed_at is None
 
     callback.claimed_at = now
-    await repository.mark_triggered(callback, now=now)
-    assert callback.status is CallbackStatus.TRIGGERED
-    assert callback.completed_at == now
+    await repository.mark_dialled(callback)
+    assert callback.status is CallbackStatus.IN_PROGRESS
     assert callback.last_error is None
     assert callback.next_attempt_at is None
     assert callback.claimed_at is None
     assert session.flush_count == 2
 
 
-class SharedReservationBoundary:
+async def test_a_dialled_callback_completes_and_a_settled_one_cannot_be_reopened() -> None:
+    """Catches a replayed completion payload resurrecting a cancelled or failed callback."""
+    now = datetime(2026, 8, 22, 10, 5, tzinfo=UTC)
+    completed = Callback(
+        id=19,
+        lead_id=7,
+        source_call_id=11,
+        requested_expression="now",
+        scheduled_at=now,
+        timezone="Asia/Kolkata",
+        status=CallbackStatus.COMPLETED,
+    )
+    session = RecordingSession(completed, None)
+    repository = CallbackRepository(session)
+
+    assert await repository.mark_completed(19, now=now) is completed
+    assert await repository.mark_completed(19, now=now) is None
+
+    compiled = session.statements[0].compile(dialect=postgresql.dialect())
+    sql = str(compiled)
+    assert "UPDATE sales_agent.callbacks" in sql
+    assert "WHERE sales_agent.callbacks.id = " in sql
+    assert "AND sales_agent.callbacks.status = " in sql
+    assert "RETURNING" in sql
+    # Only an IN_PROGRESS row is eligible, so a settled callback matches nothing.
+    assert CallbackStatus.IN_PROGRESS.value in compiled.params.values()
+    assert compiled.params["status"] == CallbackStatus.COMPLETED.value
+
+
+async def test_callback_attempt_records_one_row_per_dial() -> None:
+    """Catches per-attempt provider outcomes being collapsed into the callback row."""
+    session = RecordingSession()
+
+    attempt = await CallbackAttemptRepository(session).record(
+        callback_id=19,
+        attempt_number=2,
+        status=CallbackAttemptStatus.FAILED,
+        error="sarvam_outbound_unreachable",
+        retryable=True,
+    )
+
+    assert session.added == [attempt]
+    assert session.flush_count == 1
+    assert attempt.callback_id == 19
+    assert attempt.attempt_number == 2
+    assert attempt.status is CallbackAttemptStatus.FAILED
+    assert attempt.error == "sarvam_outbound_unreachable"
+    assert attempt.retryable is True
+
+
+class SharedMessageBoundary:
     def __init__(self) -> None:
-        self.keys: set[tuple[int, str]] = set()
+        self.rows: dict[tuple[int, str], str] = {}
         self.lock = asyncio.Lock()
+        self.next_id = 1
 
 
-class ReservationSession:
-    """Models PostgreSQL's atomic unique-key winner at the AsyncSession boundary."""
+class MessageSession:
+    """Models PostgreSQL settling the (call_id, kind) unique key at the session boundary."""
 
-    def __init__(self, shared: SharedReservationBoundary) -> None:
+    def __init__(self, shared: SharedMessageBoundary) -> None:
         self.shared = shared
-        self.added: list[object] = []
         self.statements: list[object] = []
 
     async def execute(self, statement: object) -> ScalarResult:
         self.statements.append(statement)
-        assert getattr(statement, "table").name == "delivery_reservations"
+        assert getattr(statement, "table").name == "messages"
         parameters = statement.compile(dialect=postgresql.dialect()).params  # type: ignore[attr-defined]
-        key = (parameters["call_id"], parameters["target_event_type"])
+        key = (parameters["call_id"], parameters["kind"])
         async with self.shared.lock:
-            if key in self.shared.keys:
+            existing = self.shared.rows.get(key)
+            # DO UPDATE ... WHERE status = 'FAILED': anything else returns no row.
+            if existing is not None and existing != MessageStatus.FAILED.value:
                 return ScalarResult(None)
-            self.shared.keys.add(key)
-            return ScalarResult(key[0])
-
-    def add(self, value: object) -> None:
-        self.added.append(value)
+            self.shared.rows[key] = MessageStatus.RESERVED.value
+            message = Message(
+                id=self.shared.next_id,
+                lead_id=parameters["lead_id"],
+                call_id=key[0],
+                kind=key[1],
+                status=MessageStatus.RESERVED,
+            )
+            self.shared.next_id += 1
+            return ScalarResult(message)
 
     async def flush(self) -> None:
         return None
 
 
-async def test_concurrent_delivery_reservations_have_one_owner_and_one_duplicate() -> None:
-    """Catches two concurrent high-intent requests both becoming WhatsApp delivery owners."""
-    shared = SharedReservationBoundary()
-    sessions = [ReservationSession(shared), ReservationSession(shared)]
+async def test_concurrent_reservations_for_one_call_and_kind_have_a_single_owner() -> None:
+    """Catches two concurrent high-intent tool calls both sending the lead a WhatsApp."""
+    shared = SharedMessageBoundary()
+    sessions = [MessageSession(shared), MessageSession(shared)]
 
     results = await asyncio.gather(
         *(
-            EventRepository(session).reserve_delivery(
-                lead_id=7,
-                call_id=11,
-                target_event_type=EventType.HIGH_INTENT_WHATSAPP_SENT,
+            MessageRepository(session).reserve(
+                lead_id=7, call_id=11, kind=MessageKind.HIGH_INTENT
             )
             for session in sessions
         )
     )
 
-    assert sorted(results) == [False, True]
-    requested_events = [
-        event
-        for session in sessions
-        for event in session.added
-        if isinstance(event, Event)
-    ]
-    assert [event.event_type for event in requested_events] == [
-        EventType.HIGH_INTENT_WHATSAPP_REQUESTED
-    ]
+    assert sorted(result is None for result in results) == [False, True]
     sql = _postgresql_sql(sessions[0].statements[0])
-    assert "ON CONFLICT (call_id, target_event_type) DO NOTHING" in sql
-    assert "RETURNING sales_agent.delivery_reservations.call_id" in sql
+    assert "INSERT INTO sales_agent.messages" in sql
+    assert "ON CONFLICT (call_id, kind) DO UPDATE" in sql
+    assert "WHERE sales_agent.messages.status = " in sql
+    assert "RETURNING" in sql
 
 
-async def test_completed_delivery_is_permanently_reserved_and_audited_as_sent() -> None:
-    """Catches successful delivery being released or resent after the provider result is recorded."""
-    session = RecordingSession(11, 11, None)
-    repository = EventRepository(session)
+async def test_a_sent_message_is_never_resent_and_a_failed_one_can_be_retried() -> None:
+    """Catches a provider failure permanently blocking a retry, or a success being resent."""
+    shared = SharedMessageBoundary()
+    session = MessageSession(shared)
+    repository = MessageRepository(session)
 
-    assert await repository.reserve_delivery(
-        lead_id=7,
-        call_id=11,
-        target_event_type=EventType.HIGH_INTENT_WHATSAPP_SENT,
-    )
-    assert await repository.complete_delivery(
-        lead_id=7,
-        call_id=11,
-        target_event_type=EventType.HIGH_INTENT_WHATSAPP_SENT,
-        payload={"provider_message_id": "wamid-1"},
-    )
-    assert not await repository.reserve_delivery(
-        lead_id=7,
-        call_id=11,
-        target_event_type=EventType.HIGH_INTENT_WHATSAPP_SENT,
-    )
+    first = await repository.reserve(lead_id=7, call_id=11, kind=MessageKind.HIGH_INTENT)
+    assert first is not None
 
-    events = [value for value in session.added if isinstance(value, Event)]
-    assert [event.event_type for event in events] == [
-        EventType.HIGH_INTENT_WHATSAPP_REQUESTED,
-        EventType.HIGH_INTENT_WHATSAPP_SENT,
-    ]
-    assert events[-1].payload == {"provider_message_id": "wamid-1"}
-    complete_sql = _postgresql_sql(session.statements[1])
-    assert "UPDATE sales_agent.delivery_reservations" in complete_sql
-    assert "completed_at IS NULL" in complete_sql
+    assert await repository.reserve(lead_id=7, call_id=11, kind=MessageKind.HIGH_INTENT) is None
+
+    shared.rows[(11, MessageKind.HIGH_INTENT.value)] = MessageStatus.FAILED.value
+    retry = await repository.reserve(lead_id=7, call_id=11, kind=MessageKind.HIGH_INTENT)
+    assert retry is not None
+
+    shared.rows[(11, MessageKind.HIGH_INTENT.value)] = MessageStatus.SENT.value
+    assert await repository.reserve(lead_id=7, call_id=11, kind=MessageKind.HIGH_INTENT) is None
 
 
-async def test_released_delivery_appends_failure_audit_and_permits_retry() -> None:
-    """Catches a provider failure either deleting audit history or permanently blocking a retry."""
-    session = RecordingSession(11, 11, 11)
-    repository = EventRepository(session)
+async def test_message_outcomes_record_the_provider_result_on_the_reserved_row() -> None:
+    """Catches a delivery result that never reaches the row the next request reads."""
+    now = datetime(2026, 8, 22, 10, 0, tzinfo=UTC)
+    session = RecordingSession()
+    repository = MessageRepository(session)
+    message = Message(id=1, lead_id=7, call_id=11, kind=MessageKind.FOLLOWUP_TEXT)
 
-    assert await repository.reserve_delivery(
-        lead_id=7,
-        call_id=11,
-        target_event_type=EventType.HIGH_INTENT_WHATSAPP_SENT,
-    )
-    assert await repository.release_delivery(
-        lead_id=7,
-        call_id=11,
-        target_event_type=EventType.HIGH_INTENT_WHATSAPP_SENT,
-        payload={"error": "provider_failed"},
-    )
-    assert await repository.reserve_delivery(
-        lead_id=7,
-        call_id=11,
-        target_event_type=EventType.HIGH_INTENT_WHATSAPP_SENT,
-    )
+    await repository.mark_sent(message, provider_message_id="wamid-1", now=now)
+    assert message.status is MessageStatus.SENT
+    assert message.provider_message_id == "wamid-1"
+    assert message.sent_at == now
+    assert message.last_error is None
 
-    events = [value for value in session.added if isinstance(value, Event)]
-    assert [event.event_type for event in events] == [
-        EventType.HIGH_INTENT_WHATSAPP_REQUESTED,
-        EventType.HIGH_INTENT_WHATSAPP_FAILED,
-        EventType.HIGH_INTENT_WHATSAPP_REQUESTED,
-    ]
-    release_sql = _postgresql_sql(session.statements[1])
-    assert "DELETE FROM sales_agent.delivery_reservations" in release_sql
-    assert "completed_at IS NULL" in release_sql
-
-
-def test_delivery_reservation_schema_has_postgresql_concurrency_constraint() -> None:
-    """Catches the atomic reservation key being weakened to application-only duplicate checking."""
-    table = DeliveryReservation.__table__
-    assert [column.name for column in table.primary_key.columns] == ["call_id", "target_event_type"]
-    assert table.c.call_id.references(Call.__table__.c.id)
-    assert EventType.HIGH_INTENT_WHATSAPP_REQUESTED.value in {
-        member.value for member in EventType
-    }
-
-
-class MigrationRecorder:
-    def __init__(self) -> None:
-        self.metadata = sa.MetaData()
-        sa.Table(
-            "calls",
-            self.metadata,
-            sa.Column("id", sa.BigInteger(), primary_key=True),
-            schema="sales_agent",
-        )
-        self.sql: list[str] = []
-
-    def execute(self, statement: object) -> None:
-        self.sql.append(str(statement))
-
-    def create_table(self, name: str, *columns: object, **kwargs: object) -> sa.Table:
-        table = sa.Table(name, self.metadata, *columns, **kwargs)
-        self.sql.append(str(CreateTable(table).compile(dialect=postgresql.dialect())))
-        return table
-
-
-def test_delivery_reservation_migration_preserves_requested_audit_events() -> None:
-    """Catches model-only idempotency state that cannot exist in the deployed PostgreSQL schema."""
-    path = Path("alembic/versions/20260822_0002_delivery_reservations.py")
-    spec = importlib.util.spec_from_file_location("delivery_reservation_migration", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    recorder = MigrationRecorder()
-    module.op = recorder
-
-    module.upgrade()
-    sql = "\n".join(recorder.sql).upper()
-
-    assert "CREATE TABLE SALES_AGENT.DELIVERY_RESERVATIONS" in sql
-    assert "CONSTRAINT PK_DELIVERY_RESERVATIONS PRIMARY KEY (CALL_ID, TARGET_EVENT_TYPE)" in sql
-    assert "HIGH_INTENT_WHATSAPP_REQUESTED" in sql
-    assert "FK_DELIVERY_RESERVATIONS_CALL_ID_CALLS" in sql
+    await repository.mark_failed(message, error="whapi_send_failed")
+    assert message.status is MessageStatus.FAILED
+    assert message.last_error == "whapi_send_failed"
+    assert session.flush_count == 2
