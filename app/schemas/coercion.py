@@ -35,7 +35,9 @@ def wrap_list(value: Any) -> Any:
         return []
     if isinstance(value, str):
         text = value.strip()
-        return [text] if text else []
+        # A string of only separators carries no statement, so it must not
+        # become a one-item list holding punctuation.
+        return [text] if text.strip(", 	") else []
     if isinstance(value, (list, tuple)):
         return _clean(list(value))
     return value
