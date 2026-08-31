@@ -67,51 +67,6 @@ class WhapiService:
             payload["caption"] = caption
         return await self._send("/messages/document", payload, "send_document")
 
-    async def send_resume(self, phone: str, document: str) -> WhapiResult:
-        return await self.send_document(
-            phone, document, filename="Parv_Agarwal_Resume.pdf"
-        )
-
-    async def send_architecture_image(self, phone: str, image: str) -> WhapiResult:
-        return await self.send_image(
-            phone,
-            image,
-            caption="Architecture overview of the voice sales agent.",
-        )
-
-    async def send_final_followup(
-        self,
-        phone: str,
-        message: str,
-        resume: str,
-        architecture_image: str,
-    ) -> dict[str, bool]:
-        outcomes: dict[str, bool] = {}
-        operations = (
-            ("text_sent", self.send_text(phone, message)),
-            ("resume_sent", self.send_resume(phone, resume)),
-            (
-                "architecture_sent",
-                self.send_architecture_image(phone, architecture_image),
-            ),
-        )
-        for key, operation in operations:
-            try:
-                await operation
-                outcomes[key] = True
-            except WhapiProviderError as error:
-                outcomes[key] = False
-                logger.error(
-                    "whapi_followup_failed",
-                    extra={
-                        "phone": _safe_phone(phone),
-                        "operation": key,
-                        "status": "failed",
-                        "error": str(error),
-                    },
-                )
-        return {"success": all(outcomes.values()), **outcomes}
-
     async def _send(
         self, endpoint: str, payload: dict[str, Any], operation: str
     ) -> WhapiResult:
@@ -180,10 +135,3 @@ def _extract_message_id(data: Any) -> str | None:
         if isinstance(first, dict) and isinstance(first.get("id"), str):
             return first["id"]
     return None
-
-
-def _safe_phone(phone: str) -> str:
-    try:
-        return normalize_indian_phone(phone)
-    except ValueError:
-        return "invalid"
