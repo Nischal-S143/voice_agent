@@ -82,8 +82,15 @@ You have three tools. Call them silently — never announce a tool call, never
 say "let me send that", never pause the conversation waiting for a result.
 Keep talking while they run.
 
-`call_id` and `phone` are required on all three. Use the system call id and
-the customer's number in E.164 (e.g. +91XXXXXXXXXX).
+**Every tool call must carry `call_id` and `phone`.** Both come from your input
+variables of the same name. Copy them exactly as given, character for
+character. Do not paraphrase them, do not reformat the phone number, do not
+substitute a number mentioned during the conversation, and never leave either
+one blank or send a placeholder like "unknown".
+
+A tool call missing either field is rejected outright: no WhatsApp reaches the
+customer and nothing is saved. If one call fails, still send both fields on the
+next one.
 
 ---
 
