@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.schemas.coercion import split_list
 
 
 class HighIntentWhatsAppRequest(BaseModel):
@@ -10,3 +12,7 @@ class HighIntentWhatsAppRequest(BaseModel):
     budget_range: str | None = None
     timeline: str | None = None
     summary: str | None = None
+
+    _split_features = field_validator("required_features", mode="before")(
+        staticmethod(split_list)
+    )

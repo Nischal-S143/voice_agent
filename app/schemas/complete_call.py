@@ -1,6 +1,8 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.schemas.coercion import split_list, wrap_list
 
 
 class CompleteCallRequest(BaseModel):
@@ -24,3 +26,10 @@ class CompleteCallRequest(BaseModel):
     transcript: str | None = None
     started_at: datetime | None = None
     ended_at: datetime | None = None
+
+    _split_lists = field_validator(
+        "required_features", "objections", mode="before"
+    )(staticmethod(split_list))
+    _wrap_statements = field_validator("important_statements", mode="before")(
+        staticmethod(wrap_list)
+    )
