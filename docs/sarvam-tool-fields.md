@@ -1,11 +1,26 @@
 # Tool body fields — descriptions to paste into Sarvam
 
-Each row is one row in the tool's **Body** tab: the field name, the description
-that goes in the value box, and the type dropdown.
+> **Read this first.** The value box is a **literal**, not a description.
+> Whatever you type there is sent verbatim on every call. Typing a description
+> into it does not make the agent fill the field in — it sends the description
+> text itself as the value.
+>
+> A live call proved it: the lead was stored with
+> `business_type = "The business type from the conversation, e.g. fashion..."`
+> and the customer received a WhatsApp reading *"you're looking to build a The
+> business type from the conversation... e-commerce website"*.
+>
+> So for every field except `timezone`, do not type anything in the box. Click
+> the ⚙️ **Configure value** icon and bind the field to the matching agent
+> variable, the same way `call_id` and `phone` are bound. The descriptions below
+> are what the **variable's own extraction prompt** should say — they belong in
+> the agent's variable setup, not in the tool body.
 
-Leaving a value box empty gives the agent nothing to go on. Every description
-below says when to omit a field, because an empty string still gets stored and
-makes the follow-up message read half-finished.
+Each row is one row in the tool's **Body** tab: the field name, what the value
+should resolve to, and the type dropdown.
+
+Every description below says when to omit a field, because an empty string
+still gets stored and makes the follow-up message read half-finished.
 
 ---
 
@@ -74,11 +89,17 @@ they are timestamps and a wrong format returns 422.
 
 ## Before saving each tool
 
+- Every field except `timezone` must be bound through ⚙️ **Configure value**.
+  A field still showing typed text in its box will send that text verbatim.
+- `timezone` is the only field that is genuinely a literal: `Asia/Kolkata`.
+- `call_id` and `phone` must bind to the **input variables** of the same name,
+  never to an extracted value — the customer never says their own number aloud,
+  so extraction produces garbage and the request is rejected as `invalid_phone`.
+  `call_id` carries the idempotency key; a wrong one means duplicate WhatsApps.
 - Delete the leftover `payload` field from the Postman Echo mock.
 - `Headers` should show **2**: `Content-Type` and `X-Tool-Secret`.
 - Arrays (`required_features`, `objections`, `important_statements`) must have
   type **JSON**, not Text — Text returns 422 with a `list_type` error.
-- `timezone` is the only field holding a literal value rather than a description.
 
 ## Reading a failure
 
