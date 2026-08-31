@@ -3,10 +3,10 @@
 Three tools to create on the agent. Every field name below matches
 `app/schemas/` exactly — a renamed field returns HTTP 422.
 
-**Base URL** (Cloudflare quick tunnel — changes on every restart):
+**Base URL** (Railway production — stable, does not change on restart):
 
 ```
-https://<your-deployed-domain>
+https://elevatebox-voice-agent-production.up.railway.app
 ```
 
 **Header required on all three tools:**
