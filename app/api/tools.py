@@ -72,10 +72,22 @@ async def complete_call(
         return {"success": False, "error": "database_not_configured"}
     try:
         result = await service.complete_call(payload)
-    except ValueError:
+    except ValueError as error:
+        # Nothing was written, so without the rejected value there is no way to
+        # tell a malformed number from a missing one after the call has ended.
+        logger.error(
+            "complete_call_rejected_phone",
+            extra={
+                "call_id": payload.call_id,
+                "phone": payload.phone,
+                "operation": "complete_call",
+                "status": "failed",
+                "error": str(error) or "invalid_phone",
+            },
+        )
         return {"success": False, "error": "invalid_phone"}
     except Exception:
-        logger.error("complete_call_failed")
+        logger.exception("complete_call_failed", extra={"call_id": payload.call_id})
         return {"success": False, "error": "complete_call_failed"}
     return result.model_dump()
 
@@ -91,8 +103,18 @@ async def schedule_callback(
         return {"success": False, "error": "callback_time_required"}
     try:
         return await service.schedule(payload)
-    except ValueError:
+    except ValueError as error:
+        logger.error(
+            "schedule_callback_rejected",
+            extra={
+                "call_id": payload.call_id,
+                "phone": payload.phone,
+                "operation": "schedule_callback",
+                "status": "failed",
+                "error": str(error) or "invalid_callback_request",
+            },
+        )
         return {"success": False, "error": "invalid_callback_request"}
     except Exception:
-        logger.error("schedule_callback_failed")
+        logger.exception("schedule_callback_failed", extra={"call_id": payload.call_id})
         return {"success": False, "error": "callback_schedule_failed"}

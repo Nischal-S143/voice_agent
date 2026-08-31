@@ -69,3 +69,31 @@ async def test_correct_tool_secret_reaches_protected_tool_handler() -> None:
         "message_id": "provider-1",
         "already_sent": False,
     }
+
+
+async def test_a_rejected_phone_is_logged_with_the_call_it_came_from(caplog) -> None:
+    """Catches a silent invalid_phone: nothing is written and nothing says why."""
+    import logging
+
+    class RejectingCallService:
+        async def complete_call(self, request: object) -> object:
+            raise ValueError("invalid_indian_phone")
+
+    app = create_app(
+        settings=Settings(_env_file=None, sarvam_tool_secret="test-secret"),
+        call_service=RejectingCallService(),
+    )
+    with caplog.at_level(logging.ERROR):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/tools/complete-call",
+                json={"call_id": "call-9", "phone": "not-a-number"},
+                headers={"X-Tool-Secret": "test-secret"},
+            )
+
+    assert response.json() == {"success": False, "error": "invalid_phone"}
+    record = next(r for r in caplog.records if r.message == "complete_call_rejected_phone")
+    assert record.call_id == "call-9"
+    assert record.phone == "not-a-number"
