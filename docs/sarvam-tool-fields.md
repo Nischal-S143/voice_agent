@@ -1,20 +1,29 @@
 # Tool body fields — descriptions to paste into Sarvam
 
-> **Read this first.** The value box is a **literal**, not a description.
-> Whatever you type there is sent verbatim on every call. Typing a description
-> into it does not make the agent fill the field in — it sends the description
-> text itself as the value.
+> **Read this first — set the mode before you type anything.**
 >
-> A live call proved it: the lead was stored with
+> Every Body field has a ⚙️ **Configure value** menu with three modes. The
+> default, **Fixed value**, sends whatever is in the box verbatim on every call.
+> A live call proved what that costs: the lead was stored with
 > `business_type = "The business type from the conversation, e.g. fashion..."`
 > and the customer received a WhatsApp reading *"you're looking to build a The
 > business type from the conversation... e-commerce website"*.
 >
-> So for every field except `timezone`, do not type anything in the box. Click
-> the ⚙️ **Configure value** icon and bind the field to the matching agent
-> variable, the same way `call_id` and `phone` are bound. The descriptions below
-> are what the **variable's own extraction prompt** should say — they belong in
-> the agent's variable setup, not in the tool body.
+> | Mode | Use it for |
+> |---|---|
+> | ✨ **Let the agent decide** | Everything drawn from the conversation. The description below is the model's guidance. |
+> | 𝑓ₘ **Agent variable** | `call_id` and `phone` only — bind each to the input variable of the same name. |
+> | ✏️ **Fixed value** | `timezone` only: `Asia/Kolkata`. |
+>
+> Never bind a body field to a `previous_*` variable. Those carry the *earlier*
+> call's data, injected by the backend so a callback does not re-qualify the
+> lead. They are empty on a first call and stale on a callback.
+>
+> `call_id` and `phone` must be **Agent variable**, never "Let the agent
+> decide": the customer never says their own number aloud, so the model has
+> nothing to infer from and the request is rejected as `invalid_phone`.
+> `call_id` also carries the idempotency key, so a guessed one means duplicate
+> WhatsApps.
 
 Each row is one row in the tool's **Body** tab: the field name, what the value
 should resolve to, and the type dropdown.
@@ -89,13 +98,11 @@ they are timestamps and a wrong format returns 422.
 
 ## Before saving each tool
 
-- Every field except `timezone` must be bound through ⚙️ **Configure value**.
-  A field still showing typed text in its box will send that text verbatim.
-- `timezone` is the only field that is genuinely a literal: `Asia/Kolkata`.
-- `call_id` and `phone` must bind to the **input variables** of the same name,
-  never to an extracted value — the customer never says their own number aloud,
-  so extraction produces garbage and the request is rejected as `invalid_phone`.
-  `call_id` carries the idempotency key; a wrong one means duplicate WhatsApps.
+- Check the ⚙️ mode on **every** field. A field left on **Fixed value** sends
+  its own description text as the value.
+- `call_id` and `phone`: **Agent variable**. `timezone`: **Fixed value**.
+  Everything else: **Let the agent decide**.
+- No body field should point at a `previous_*` variable.
 - Delete the leftover `payload` field from the Postman Echo mock.
 - `Headers` should show **2**: `Content-Type` and `X-Tool-Secret`.
 - Arrays (`required_features`, `objections`, `important_statements`) must have
